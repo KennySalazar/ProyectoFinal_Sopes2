@@ -1,0 +1,8 @@
+services:
+  backend:
+    build: ./backend
+    ports: ["8090:8090"]
+  frontend:
+    build: ./frontend
+    ports: ["5173:80"]
+    depends_on: [backend]
