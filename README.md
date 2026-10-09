@@ -218,12 +218,4 @@ docker compose exec db psql -U redxela -d redxela -c "SELECT * FROM warehouse_lo
 Son vistas de consulta. La fuente autoritativa es un checkpoint BYTEA confirmado
 junto con una proyeccion JSONB. Modifique el dominio por la interfaz/API, no SQL manual.
 
-## Decisiones y limites
 
-Cuentas de clientes sin login: el enunciado exige registro y servicio.
-Recepcion e Inventario son hilos independientes del mismo proceso, con mensajes.
-Historial visible: ultimos 100 finalizados, por ID descendente; no orden de termino.
-El motor conserva toda la corrida y reescribe checkpoints completos, por lo que
-la generacion sin tope fijo no implica memoria o capacidad fisica infinitas.
-Si falla persistencia, se pausa el motor y se requiere restablecer la base y reiniciar.
-Los manuales y la guia explican estas decisiones y los pasos de demostracion.
