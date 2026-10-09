@@ -1,0 +1,287 @@
+GUIA PARA LA CALIFICACION - REDXela
+Proyecto final de Sistemas Operativos 2
+
+1. COMO PRESENTO MI PROYECTO
+
+Mi proyecto simula un centro de distribucion donde varios pedidos necesitan
+usar el mismo personal y equipo. El problema principal es coordinar ese trabajo
+sin superar la capacidad de los recursos, sin perder recepciones y sin dejar
+pedidos detenidos por una mala asignacion. La interfaz me permite observar
+lo que hace el motor y provocar situaciones concretas para explicarlas.
+
+Uso Java para el backend porque el enunciado pide hilos y sincronizacion real.
+React me permite mostrar pedidos, recursos e inventario en una interfaz web.
+PostgreSQL conserva la corrida y Docker facilita ejecutarla con los servicios
+configurados. El servidor HTTP pertenece al JDK; no estoy utilizando Spring Boot.
+
+2. POR QUE SEPARE LA INTERFAZ DEL MOTOR
+
+La interfaz muestra el estado y envia solicitudes, pero no asigna recursos.
+Las decisiones se toman en Java. Por eso los pedidos siguen avanzando aunque
+cierre el navegador. React consulta un snapshot cada 700 milisegundos, mientras
+el planificador revisa la cola cada 50 milisegundos. No afirmo que sea tiempo
+real estricto: es una actualizacion frecuente para observar la simulacion.
+
+Main.java atiende la API. Simulation.java coordina pedidos, areas y recursos.
+Warehouse.java administra lotes y ubicaciones. StateStore.java guarda y recupera
+la corrida. Scheduling.java contiene reglas compartidas de prioridad y SLA.
+Comparison.java ejecuta el experimento de comparacion y Json.java genera JSON.
+
+3. QUE HILOS UTILIZO
+
+Tengo tareas programadas para el planificador y el generador, un grupo de
+16 trabajadores para etapas y dos hilos para Recepcion e Inventario. El servidor
+HTTP usa ocho trabajadores y la prueba de conflicto crea dos hilos dedicados.
+El generador intenta crear un pedido cada segundo y utiliza clientes registrados.
+Para mostrar todos los niveles preparo al menos una cuenta de cada servicio.
+
+Uso un pool para reutilizar trabajadores en lugar de crear un hilo nuevo por
+cada etapa. Tener 16 trabajadores no significa poder usar 16 encargados de
+bodega: los semaforos siguen imponiendo la capacidad real de diez encargados.
+
+4. PARA QUE ME SIRVE SYNCHRONIZED
+
+Hay datos que varias tareas necesitan revisar y cambiar: pedidos, reservas,
+propietarios y metricas. Uso un monitor comun para que una transicion se vea
+completa y otra tarea no observe un estado a medio modificar. Por ejemplo,
+no quiero que dos pedidos crean que las mismas unidades siguen disponibles.
+
+No dejo a los trabajadores durmiendo dentro del monitor. La duracion de una
+etapa se simula fuera de esa seccion, mientras el pedido conserva los permisos
+que necesita. Asi otras tareas pueden revisar la cola y el inventario.
+La persistencia se confirma dentro de la transicion; eso simplifica coherencia,
+aunque hace que una base lenta retrase otras operaciones.
+
+5. COMO REPRESENTO LOS RECURSOS
+
+Utilizo semaforos con las capacidades del enunciado: seis empaques, dos cargas,
+diez encargados de bodega, tres montacargas, cuatro controles de calidad y un
+escaner. Tambien registro el propietario de cada unidad para mostrarlo en pantalla.
+El escaner es realmente el mismo para Recepcion y despacho.
+
+Un permiso representa una unidad del recurso. Si no hay permiso, el pedido
+espera. Para una etapa tomo un permiso de cada grupo requerido; las unidades
+de producto aumentan la duracion, no el numero de trabajadores asignados.
+La liberacion queda en finally para que tambien se ejecute si ocurre un error
+o una interrupcion. La equidad del semaforo por si sola no define la politica:
+la seleccion la hace mi planificador.
+
+6. COMO EVITO DEADLOCK EN EL FLUJO NORMAL
+
+Antes de iniciar una etapa compruebo que todos sus recursos esten disponibles.
+La comprobacion y la adquisicion se realizan bajo el mismo monitor. Si falta
+alguno, no retengo parte de los recursos esperando el resto. Asi evito la
+retencion y espera que podria formar un ciclo.
+
+Tampoco asigno estaciones a un pedido que no tiene stock reservado. Un pedido
+con falta de mercancia espera sin dejar ocupados montacargas o personal.
+La prioridad es una preferencia de admision: no interrumpo una etapa activa.
+
+7. POR QUE HAY UN INTERBLOQUEO DELIBERADO
+
+El enunciado pide demostrar el problema y resolverlo manualmente. Por eso
+separo el flujo seguro de una ruta de prueba que adquiere recursos al reves.
+Un pedido toma el escaner y espera el control de despacho; el otro toma el
+control y espera el escaner. Uso una barrera CountDownLatch para asegurar
+que ambos tengan su primer recurso antes de intentar el segundo.
+
+El control de despacho es auxiliar para esta demostracion. No reemplaza ni
+aumenta las capacidades operativas exigidas. En el ciclo puedo explicar las
+cuatro condiciones: exclusion mutua, retencion y espera, ausencia de liberacion
+forzada automatica y espera circular. El bloqueo es de hilos y permisos reales.
+
+Al elegir el ganador interrumpo cooperativamente al perdedor. Su finally libera
+el permiso y permite avanzar al ganador. Despues ambos regresan al flujo normal.
+No uso Thread.stop. Elegir ganador significa que sale primero del conflicto,
+no que necesariamente termina antes todas las etapas del despacho.
+
+8. COMO SE COMUNICAN RECEPCION E INVENTARIO
+
+Son dos hilos independientes del mismo proceso Java. Recepcion escanea y envia
+un evento inmutable por una BlockingQueue. Inventario consume ese mensaje y
+registra el lote en Warehouse. No presento esta comunicacion como dos procesos
+nativos separados ni como una FIFO del sistema operativo.
+
+La cola tiene capacidad de ocho mensajes. Si se llena no descarto la recepcion
+ni dejo una peticion HTTP esperando indefinidamente: conservo el pendiente en
+el estado durable y reintento entregarlo. El identificador del lote evita que
+un mensaje repetido agregue stock dos veces. La cola es un transporte temporal;
+la recepcion guardada permite recuperarla despues de reiniciar.
+
+9. POR QUE RESERVO TODO EL PEDIDO A LA VEZ
+
+Si un pedido solicita dos productos y solo existe uno, prefiero no reservar
+ninguno todavia. Asi no dejo existencias apartadas indefinidamente por un pedido
+que no puede avanzar. Cuando todas las lineas tienen disponibilidad hago la
+reserva completa y la mantengo entre etapas.
+
+Fisicas son unidades en el almacen, reservadas son unidades apartadas y
+disponibles son fisicas menos reservadas. Reservar no retira el producto.
+El descuento fisico ocurre al completar despacho y se confirma junto con
+el estado COMPLETADO para evitar un consumo duplicado.
+
+10. COMO GUARDO LOTES EN UBICACIONES NO CONTIGUAS
+
+Defini 600 unidades de capacidad en 60 celdas de diez. Es una capacidad abstracta
+para la simulacion, no una medida en metros cubicos. Un lote tiene una lista
+de asignaciones que indica celda, producto, cantidad y reserva.
+
+Recorro las celdas con (posicion * 17) modulo 60. Como 17 y 60 son coprimos,
+puedo visitar todas sin repetirlas en el recorrido. Eso permite repartir un
+lote sin exigir celdas contiguas. Si una recepcion no cabe completa, queda
+esperando espacio y no se agrega parcialmente.
+
+11. POR QUE DEFINI CINCO TIPOS DE MERCANCIA
+
+El servicio define cuando atender y la mercancia define que recursos necesita.
+General requiere empaque; Fragil agrega calidad; Pesado usa montacargas sin
+empaque; Voluminoso combina montacargas y empaque; Electronico requiere calidad
+sin empaque. Todos pasan por bodega y despacho. Las combinaciones de etapas
+son distintas. Un pedido mixto toma la union de necesidades.
+
+La duracion es proporcional al total de unidades: preparacion 150 ms por unidad,
+empaque 250, calidad 180, escaneo 40 y carga 80. No todas las mercancias pasan
+por todas las etapas. Estas duraciones representan trabajo, no limites SLA.
+
+12. COMO EXPLICO LAS POLITICAS
+
+PRIORIDAD atiende primero el nivel menor. FIFO usa el ID de llegada. UNIDADES
+prefiere pedidos pequenos para liberar recursos mas pronto. ENVEJECIMIENTO
+mejora la prioridad efectiva conforme se acumula espera. Empates por ID.
+
+La prioridad estricta puede dejar atras a pedidos economicos si siguen llegando
+pedidos urgentes. Con envejecimiento resto un nivel por cada intervalo de espera,
+hasta llegar a uno. No cambio el servicio contratado y no genero stock con ese
+ascenso. Si todos llegan a nivel efectivo uno, el orden de llegada desempata.
+El tiempo procesando no produce promociones.
+
+13. QUE TIEMPO MIDO Y QUE SIGNIFICA SLA
+
+Separo espera y procesamiento. Uso System.nanoTime para intervalos porque
+necesito medir duraciones sin depender de cambios del reloj del calendario.
+Los promedios generales corresponden a pedidos completados. La ocupacion es
+el tiempo ocupado acumulado dividido entre capacidad y tiempo observado.
+
+Para no esperar hasta dos horas durante una prueba uso un reloj virtual SLA.
+La escala inicial es 60: un segundo real equivale a un minuto simulado de espera.
+Cada pedido conserva la escala con la que nacio. Cambiarla no altera pedidos
+anteriores, no acelera hilos y no modifica el envejecimiento.
+
+Los limites son 10, 30, 60 y 120 minutos para niveles dos a cinco. El enunciado
+no da un numero para casi instantaneo; adopte un minuto simulado para Expres
+y lo declaro como decision. Estar exactamente en el limite cumple; superarlo
+incumple. Un pendiente vencido sigue esperando y puede terminar despues.
+Pedidos de versiones anteriores sin medicion se muestran SIN_MEDICION.
+No prometo cumplir plazos si no hay stock o la demanda supera la capacidad.
+
+14. POR QUE LA COMPARACION USA LA MISMA SEMILLA
+
+Para comparar politicas necesito cambiar el criterio y mantener la carga.
+Si genero pedidos distintos para cada politica, la diferencia podria venir
+de la cantidad o del producto y no de la planificacion.
+
+Uso un modelo de eventos discretos con semilla, llegadas, unidades y duraciones
+repetibles. Comparte reglas, etapas y capacidades con el motor real, pero no
+mide hilos reales ni latencia de PostgreSQL. Supone stock suficiente y no toca
+los pedidos operativos. Con la misma semilla, cantidad, escala e intervalo
+obtengo el mismo resultado. El limite de 100 es del experimento; el generador
+operativo no tiene ese tope. Ninguna politica es siempre la mejor.
+
+15. POR QUE GUARDO UN CHECKPOINT EN POSTGRESQL
+
+Quiero recuperar pedidos, reservas, lotes y recepciones como un estado coherente.
+Guardo un checkpoint serializado BYTEA y una proyeccion JSONB en una misma
+transaccion. Las vistas SQL permiten consultar informacion sin leer objetos Java.
+No son tablas normalizadas por entidad ni estoy usando JPA.
+
+Esta decision simplifica la recuperacion y evita guardar el consumo sin guardar
+el pedido completado. A cambio, reescribir toda la corrida cuesta mas cuando
+crece la historia. Para produccion consideraria tablas y transacciones por
+entidad, pero para esta simulacion priorice explicar y verificar atomicidad.
+Un bloqueo consultivo impide que dos motores administren la misma corrida.
+Si falla la persistencia, pauso operaciones y reinicio desde el ultimo estado
+confirmado despues de recuperar la conexion.
+
+16. QUE PASA AL REINICIAR
+
+Los datos se conservan en el volumen PostgreSQL. Los hilos y semaforos no se
+guardan: se reconstruyen. Un completado sigue completado; una etapa pendiente
+se repite conservando la reserva. Las recepciones pendientes se reintentan
+sin duplicar lotes. El generador vuelve detenido y la ocupacion se mide desde
+el nuevo proceso. El tiempo apagado no se suma como espera.
+
+La espera se confirma periodicamente y un cierre abrupto puede perder el tramo
+desde el ultimo checkpoint, aproximadamente cinco segundos. No afirmo recuperar
+cada nanosegundo ante una caida. La simulacion no envia camiones reales; repetir
+una etapa no representa repetir una accion externa irreversible.
+
+17. COMO EXPLICO CLIENTES, VALIDACIONES Y EXCEPCIONES
+
+Registro nombre, correo unico y servicio. El pedido conserva el servicio con
+que se creo aunque la cuenta cambie despues. No incorpore login con contrasena
+porque el enunciado pide cuenta y servicio, no autenticacion. No afirmo que
+esta interfaz abierta sea un sistema comercial listo para internet.
+
+Valido cantidades, productos, clientes y configuracion. Los errores de entrada
+responden 400, rutas desconocidas 404 y metodos incorrectos 405. Errores internos
+responden 500 y quedan en consola. En Java libero permisos con finally y manejo
+interrupciones y rechazos del executor para no dejar recursos ocupados.
+
+18. GUION DE DEMOSTRACION
+
+Antes: generador detenido, cuentas de los cinco niveles, producto elegido y
+saldo anotado. Evito otras operaciones sobre ese producto durante cada prueba.
+
+A. Cliente y servicio historico
+Registro una cuenta Prioritaria, creo un pedido, cambio su servicio a Economico
+y creo otro. Muestro que el primero conserva nivel dos y el nuevo usa nivel cinco.
+
+B. Stock y reactivacion
+Elijo un producto sin stock, creo pedido de 20 y recibo 50. Muestro espera sin
+recursos, recepcion REGISTRADA, despacho y saldo 30 sin reservas pendientes.
+
+C. Recursos y almacen
+Creo pedidos con varias unidades para observar etapas activas. Muestro el
+propietario de cada recurso y las ubicaciones no contiguas de un lote.
+
+D. Envejecimiento
+Configuro intervalo cinco segundos y creo un pedido Economico sin stock.
+Despues de 20 segundos acumulados llega a nivel efectivo uno. Creo un Expres
+del mismo producto: en empate queda antes el antiguo. Recibo una sola unidad
+para observar a quien se asigna el stock, y otra para terminar el segundo.
+
+E. Interbloqueo
+Preparo diez unidades libres y provoco conflicto con cinco por pedido. Muestro
+el ciclo, elijo ganador, explico la interrupcion y verifico ambos despachos.
+
+F. SLA
+Aplico escala 600 y creo un Prioritario sin stock. Al superar un segundo de
+espera real aparece VENCIDO. Recibo stock y al terminar aparece INCUMPLIDO.
+
+G. Comparacion
+Uso semilla 42 y cantidad 100. Muestro cuatro politicas y detalles. Repito
+sin cambiar entradas y comparo resultados. Aclaro que son pedidos virtuales.
+
+H. Persistencia
+Anoto datos, ejecuto docker compose down y docker compose up --build.
+Compruebo clientes, stock y completados. No uso down -v.
+
+19. COMANDOS QUE TENGO LISTOS
+
+Desde redxela:
+
+docker compose up --build
+docker compose ps
+docker compose logs backend
+docker compose logs db
+docker compose down
+
+docker compose exec db psql -U redxela -d redxela -c "SELECT * FROM inventory_products ORDER BY product_id;"
+docker compose exec db psql -U redxela -d redxela -c "SELECT * FROM customer_accounts ORDER BY client_id;"
+docker compose exec db psql -U redxela -d redxela -c "SELECT * FROM warehouse_locations WHERE used > 0 ORDER BY cell_id;"
+
+Interfaz: http://localhost:5173
+Estado de API: http://localhost:8090/api/state
+PostgreSQL externo: localhost:5439, base y usuario redxela.
+
+

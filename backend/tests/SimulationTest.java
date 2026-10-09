@@ -25,10 +25,11 @@ public final class SimulationTest {
     }
     public static void main(String[] args) throws Exception {
         try(var s=new Simulation(20)){
+            for(int product=1;product<=5;product++)s.seedStock(product,60);
             invalid(()->s.create(0,List.of(new Simulation.Line(1,1))));
             invalid(()->s.create(3,List.of(new Simulation.Line(100,1))));
             invalid(()->s.create(3,List.of(new Simulation.Line(1,0))));
-            invalid(()->s.create(3,List.of(new Simulation.Line(1,1000),new Simulation.Line(2,1))));
+            invalid(()->s.create(3,List.of(new Simulation.Line(1,600),new Simulation.Line(2,1))));
             invalid(()->s.setPolicy("INVALIDA"));
             var mixed=s.create(5,List.of(new Simulation.Line(1,2),new Simulation.Line(1,3),new Simulation.Line(2,1)));
             check(number(mixed.get("units"))==6,"Total incorrecto");check(list(mixed,"lines").size()==2,"No consolido productos");
@@ -55,6 +56,7 @@ public final class SimulationTest {
             System.out.println("PASS: validacion, lineas mixtas, 3 politicas, 29 pedidos, 5 etapas, capacidades, propietarios y liberacion");
         }
         try(var parallelLoad=new Simulation(5)) {
+            parallelLoad.seedStock(1,120);
             for(int i=0;i<6;i++)parallelLoad.create(3,List.of(new Simulation.Line(1,20)));
             parallelLoad.start();long loadDeadline=System.nanoTime()+10_000_000_000L;boolean twoLoads=false;
             while(System.nanoTime()<loadDeadline) {
@@ -68,7 +70,7 @@ public final class SimulationTest {
             check(number(parallelLoad.snapshot().get("completed"))==6,"No termino la prueba de carga paralela");
             System.out.println("PASS: ambas areas de carga en paralelo con escaner unico");
         }
-        Simulation interrupted=new Simulation();interrupted.create(1,List.of(new Simulation.Line(4,1000)));interrupted.start();
+        Simulation interrupted=new Simulation();interrupted.seedStock(4,100);interrupted.create(1,List.of(new Simulation.Line(4,100)));interrupted.start();
         long deadline=System.nanoTime()+2_000_000_000L;
         while(number(interrupted.snapshot().get("activeCount"))==0&&System.nanoTime()<deadline)Thread.sleep(5);
         check(number(interrupted.snapshot().get("activeCount"))>0,"No inicio prueba de interrupcion");

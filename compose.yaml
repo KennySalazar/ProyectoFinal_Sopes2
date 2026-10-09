@@ -1,8 +1,31 @@
 services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: redxela
+      POSTGRES_USER: redxela
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-redxela_local}
+    ports: ["5439:5432"]
+    volumes:
+      - redxela_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U redxela -d redxela"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
   backend:
     build: ./backend
+    environment:
+      DATABASE_URL: jdbc:postgresql://db:5432/redxela
+      DATABASE_USER: redxela
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-redxela_local}
     ports: ["8090:8090"]
+    depends_on:
+      db:
+        condition: service_healthy
   frontend:
     build: ./frontend
     ports: ["5173:80"]
     depends_on: [backend]
+volumes:
+  redxela_pgdata:
